@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Copy, Download, FileText, Loader2 } from "lucide-react";
+import { Copy, Download, FileText, Loader2, Share2, Check } from "lucide-react";
 
 interface StreamingOutputProps {
   content: string;
@@ -11,6 +11,7 @@ interface StreamingOutputProps {
   onCopy: () => void;
   onExportMarkdown: () => void;
   onExportPDF: () => void;
+  onShare?: () => Promise<string | null>;
 }
 
 export function StreamingOutput({
@@ -19,8 +20,12 @@ export function StreamingOutput({
   onCopy,
   onExportMarkdown,
   onExportPDF,
+  onShare,
 }: StreamingOutputProps) {
   const contentRef = useRef<HTMLDivElement>(null);
+  const [isSharing, setIsSharing] = useState(false);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   // Auto-scroll while streaming
   useEffect(() => {
@@ -30,6 +35,23 @@ export function StreamingOutput({
   }, [content, isStreaming]);
 
   const hasContent = content.length > 0;
+
+  const handleShare = async () => {
+    if (!onShare) return;
+    setIsSharing(true);
+    try {
+      const shareId = await onShare();
+      if (shareId) {
+        const url = `${window.location.origin}/r/${shareId}`;
+        setShareUrl(url);
+        await navigator.clipboard.writeText(url);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }
+    } finally {
+      setIsSharing(false);
+    }
+  };
 
   return (
     <Card className="flex flex-col h-full">
@@ -52,6 +74,31 @@ export function StreamingOutput({
               <Download className="h-4 w-4 mr-1" />
               PDF
             </Button>
+            {onShare && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleShare}
+                disabled={isSharing}
+              >
+                {copied ? (
+                  <>
+                    <Check className="h-4 w-4 mr-1 text-green-500" />
+                    Copied!
+                  </>
+                ) : isSharing ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    Sharing...
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="h-4 w-4 mr-1" />
+                    Share
+                  </>
+                )}
+              </Button>
+            )}
           </div>
         )}
       </CardHeader>

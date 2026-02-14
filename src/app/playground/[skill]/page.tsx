@@ -99,6 +99,31 @@ export default function SkillPage() {
     analytics.skillExported({ skillId, format: "markdown" });
   }, [completion, skillId]);
 
+  const handleShare = useCallback(async (): Promise<string | null> => {
+    if (!skill || !completion) return null;
+    
+    try {
+      const response = await fetch("/api/share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          skillId,
+          skillName: skill.name,
+          input: inputs,
+          output: completion,
+        }),
+      });
+      
+      if (!response.ok) return null;
+      
+      const { shareId } = await response.json();
+      analytics.shareCreated(skillId);
+      return shareId;
+    } catch {
+      return null;
+    }
+  }, [skill, skillId, inputs, completion]);
+
   const handleExportPDF = useCallback(() => {
     analytics.skillExported({ skillId, format: "pdf" });
     // Simple print-to-PDF approach
@@ -261,6 +286,7 @@ export default function SkillPage() {
             onCopy={handleCopy}
             onExportMarkdown={handleExportMarkdown}
             onExportPDF={handleExportPDF}
+            onShare={handleShare}
           />
         </div>
       </main>
