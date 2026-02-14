@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import Link from "next/link";
 import { useCompletion } from "@ai-sdk/react";
 import { getSkill, skills } from "@/lib/skills";
@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { StreamingOutput } from "@/components/streaming-output";
 import { ArrowLeft, ArrowRight, Play, RotateCcw } from "lucide-react";
+import { analytics } from "@/lib/analytics";
 
 export default function SkillPage() {
   const params = useParams();
@@ -21,11 +22,34 @@ export default function SkillPage() {
 
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [hasRun, setHasRun] = useState(false);
+  const startTimeRef = useRef<number>(0);
+  const hasTrackedCompletion = useRef(false);
 
   const { completion, isLoading, complete, setCompletion } = useCompletion({
     api: `/api/skills/${skillId}`,
     body: { inputs },
+    onError: (error) => {
+      analytics.skillError({
+        skillId,
+        errorType: "api_error",
+        errorMessage: error.message,
+      });
+    },
   });
+
+  // Track completion when streaming finishes
+  useEffect(() => {
+    if (!isLoading && completion && hasRun && !hasTrackedCompletion.current) {
+      const durationMs = Date.now() - startTimeRef.current;
+      analytics.skillCompleted({
+        skillId,
+        source: "direct",
+        durationMs,
+        outputLength: completion.length,
+      });
+      hasTrackedCompletion.current = true;
+    }
+  }, [isLoading, completion, hasRun, skillId]);
 
   const handleInputChange = useCallback((fieldId: string, value: string) => {
     setInputs((prev) => ({ ...prev, [fieldId]: value }));
@@ -44,9 +68,14 @@ export default function SkillPage() {
       return;
     }
 
+    // Track skill started
+    startTimeRef.current = Date.now();
+    hasTrackedCompletion.current = false;
+    analytics.skillStarted({ skillId, source: "direct" });
+
     setHasRun(true);
     await complete("", { body: { inputs } });
-  }, [skill, inputs, complete]);
+  }, [skill, inputs, complete, skillId]);
 
   const handleReset = useCallback(() => {
     setInputs({});
@@ -56,7 +85,8 @@ export default function SkillPage() {
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(completion);
-  }, [completion]);
+    analytics.skillExported({ skillId, format: "clipboard" });
+  }, [completion, skillId]);
 
   const handleExportMarkdown = useCallback(() => {
     const blob = new Blob([completion], { type: "text/markdown" });
@@ -66,9 +96,11 @@ export default function SkillPage() {
     a.download = `${skillId}-output.md`;
     a.click();
     URL.revokeObjectURL(url);
+    analytics.skillExported({ skillId, format: "markdown" });
   }, [completion, skillId]);
 
   const handleExportPDF = useCallback(() => {
+    analytics.skillExported({ skillId, format: "pdf" });
     // Simple print-to-PDF approach
     const printWindow = window.open("", "_blank");
     if (printWindow) {
