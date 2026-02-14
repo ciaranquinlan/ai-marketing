@@ -11,8 +11,21 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { StreamingOutput } from "@/components/streaming-output";
-import { ArrowLeft, ArrowRight, Play, RotateCcw } from "lucide-react";
+import { ArrowLeft, ArrowRight, Play, RotateCcw, Workflow } from "lucide-react";
 import { analytics } from "@/lib/analytics";
+import { WorkflowStepper } from "@/components/workflow-stepper";
+import {
+  WorkflowState,
+  loadWorkflow,
+  saveWorkflow,
+  clearWorkflow,
+  getNextSkills,
+  createWorkflow,
+  addWorkflowStep,
+  updateStepStatus,
+  nextStep,
+  getCombinedOutput,
+} from "@/lib/workflow";
 
 export default function SkillPage() {
   const params = useParams();
@@ -22,8 +35,23 @@ export default function SkillPage() {
 
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [hasRun, setHasRun] = useState(false);
+  const [workflow, setWorkflow] = useState<WorkflowState | null>(null);
   const startTimeRef = useRef<number>(0);
   const hasTrackedCompletion = useRef(false);
+
+  // Load workflow on mount
+  useEffect(() => {
+    const saved = loadWorkflow();
+    if (saved && saved.steps.some((s) => s.skillId === skillId)) {
+      setWorkflow(saved);
+    }
+  }, [skillId]);
+
+  // Get next skills for workflow continuation
+  const nextSkillIds = getNextSkills(skillId);
+  const nextSkillsForWorkflow = nextSkillIds
+    .map((id) => skills.find((s) => s.id === id))
+    .filter(Boolean);
 
   const { completion, isLoading, complete, setCompletion } = useCompletion({
     api: `/api/skills/${skillId}`,
@@ -43,13 +71,19 @@ export default function SkillPage() {
       const durationMs = Date.now() - startTimeRef.current;
       analytics.skillCompleted({
         skillId,
-        source: "direct",
+        source: workflow ? "workflow" : "direct",
         durationMs,
         outputLength: completion.length,
       });
       hasTrackedCompletion.current = true;
+
+      // Update workflow if active
+      if (workflow) {
+        const updated = updateStepStatus(workflow, "complete", completion, inputs);
+        setWorkflow(updated);
+      }
     }
-  }, [isLoading, completion, hasRun, skillId]);
+  }, [isLoading, completion, hasRun, skillId, workflow, inputs]);
 
   const handleInputChange = useCallback((fieldId: string, value: string) => {
     setInputs((prev) => ({ ...prev, [fieldId]: value }));
@@ -82,6 +116,37 @@ export default function SkillPage() {
     setCompletion("");
     setHasRun(false);
   }, [setCompletion]);
+
+  const handleContinueWorkflow = useCallback((nextSkillId: string, nextSkillName: string) => {
+    if (!skill) return;
+    
+    let currentWorkflow = workflow;
+    
+    // Create workflow if not exists
+    if (!currentWorkflow) {
+      currentWorkflow = createWorkflow(skillId, skill.name);
+      // Mark current step as complete
+      currentWorkflow = updateStepStatus(currentWorkflow, "complete", completion, inputs);
+    }
+    
+    // Add next step
+    currentWorkflow = addWorkflowStep(currentWorkflow, nextSkillId, nextSkillName);
+    currentWorkflow = nextStep(currentWorkflow);
+    setWorkflow(currentWorkflow);
+    
+    // Track workflow analytics
+    if (currentWorkflow.steps.length === 2) {
+      analytics.workflowStarted(currentWorkflow.id, skillId);
+    }
+    
+    // Navigate to next skill
+    router.push(`/playground/${nextSkillId}`);
+  }, [workflow, skillId, skill, completion, inputs, router]);
+
+  const handleExitWorkflow = useCallback(() => {
+    clearWorkflow();
+    setWorkflow(null);
+  }, []);
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(completion);
@@ -189,17 +254,18 @@ export default function SkillPage() {
                 Skills
               </Link>
             </Button>
-            <div className="flex items-center gap-2">
-              <span className="text-2xl">{skill.icon}</span>
-              <span className="font-semibold">{skill.name}</span>
-            </div>
+            {workflow ? (
+              <WorkflowStepper workflow={workflow} />
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">{skill.icon}</span>
+                <span className="font-semibold">{skill.name}</span>
+              </div>
+            )}
           </div>
-          {hasRun && completion && !isLoading && (
-            <Button variant="outline" size="sm" asChild>
-              <Link href={`/playground/${nextSkill.id}`}>
-                Next: {nextSkill.name}
-                <ArrowRight className="h-4 w-4 ml-2" />
-              </Link>
+          {workflow && (
+            <Button variant="ghost" size="sm" onClick={handleExitWorkflow}>
+              Exit Workflow
             </Button>
           )}
         </div>
@@ -289,6 +355,32 @@ export default function SkillPage() {
             onShare={handleShare}
           />
         </div>
+
+        {/* Continue workflow prompt */}
+        {hasRun && completion && !isLoading && nextSkillsForWorkflow.length > 0 && (
+          <div className="mt-6 p-6 rounded-lg border bg-muted/50">
+            <div className="flex items-center gap-2 mb-4">
+              <Workflow className="h-5 w-5 text-primary" />
+              <h3 className="font-semibold">Continue Your Strategy</h3>
+            </div>
+            <p className="text-sm text-muted-foreground mb-4">
+              Your output can feed into these skills. Context carries forward automatically.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              {nextSkillsForWorkflow.map((nextS) => nextS && (
+                <Button
+                  key={nextS.id}
+                  variant="outline"
+                  onClick={() => handleContinueWorkflow(nextS.id, nextS.name)}
+                >
+                  <span className="mr-2">{nextS.icon}</span>
+                  {nextS.name}
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );
